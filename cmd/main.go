@@ -1,78 +1,21 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"github.com/schollz/progressbar/v3"
-	"io"
+	"log"
 	"math/rand"
 	"net"
-	"net/http"
 	"os"
+	"stun/package/myip"
 	"time"
 )
 
 var token = flag.String("t", "20232023", "Token")
 var listenPort = flag.Int("p", 20232, "Listen port")
 var dstIpaddr = flag.String("ip", "", "Target IP address")
-var delayNum = rand.Intn(4000)
-
-func getMyIp() (net.IP, error) {
-	r, err := http.Get("https://ipv4.jsonip.com/")
-	if err != nil {
-		return nil, err
-	}
-
-	defer func() {
-		_ = r.Body.Close()
-	}()
-
-	b, err := io.ReadAll(r.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	var res map[string]interface{}
-	err = json.Unmarshal(b, &res)
-	if err != nil {
-		return nil, err
-	}
-
-	ipStr := res["ip"].(string)
-	ip := net.ParseIP(ipStr)
-	return ip, nil
-}
-
-func getMyIpV2() (net.IP, error) {
-	r, err := http.Get("https://ipv4.json.myip.wtf/")
-	if err != nil {
-		return nil, err
-	}
-
-	defer func() {
-		_ = r.Body.Close()
-	}()
-
-	b, err := io.ReadAll(r.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	var res map[string]interface{}
-	err = json.Unmarshal(b, &res)
-	if err != nil {
-		return nil, err
-	}
-
-	ipStr := res["YourFuckingIPAddress"].(string)
-	ip := net.ParseIP(ipStr)
-	return ip, nil
-}
-
-func generatePort() int {
-	return rand.Intn(48128) + 1024
-}
+var delayNum = flag.Int("i", rand.Intn(4000), "Scan interval")
 
 func scan(lPort int, rIp net.IP) *net.UDPAddr {
 	lUdpAddr, _ := net.ResolveUDPAddr("udp4", fmt.Sprintf(":%d", lPort))
@@ -95,7 +38,7 @@ func scan(lPort int, rIp net.IP) *net.UDPAddr {
 				os.Exit(-1)
 			}
 
-			if string(buf[:n]) != token {
+			if string(buf[:n]) != *token {
 				continue
 			}
 
@@ -109,7 +52,7 @@ func scan(lPort int, rIp net.IP) *net.UDPAddr {
 			Port: port,
 			IP:   rIp,
 		}
-		_, err = listenConn.WriteToUDP([]byte(token), &addr)
+		_, err = listenConn.WriteToUDP([]byte(*token), &addr)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(-1)
@@ -132,7 +75,7 @@ func scan(lPort int, rIp net.IP) *net.UDPAddr {
 
 			_ = bar.Add(1)
 			//fmt.Printf("%d%%..", i*100/65535)
-			time.Sleep(time.Duration(500+delayNum) * time.Microsecond)
+			time.Sleep(time.Duration(500+*delayNum) * time.Microsecond)
 
 			select {
 			case <-recvD:
@@ -143,7 +86,7 @@ func scan(lPort int, rIp net.IP) *net.UDPAddr {
 		}
 
 		//time.Sleep(time.Microsecond)
-		time.Sleep(time.Duration(500+delayNum) * time.Microsecond)
+		time.Sleep(time.Duration(500+*delayNum) * time.Microsecond)
 	}
 
 	select {
@@ -164,32 +107,20 @@ func scan(lPort int, rIp net.IP) *net.UDPAddr {
 }
 
 func main() {
-	//delayNum =
 	flag.Parse()
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	log.Println("Started")
 
-	var ip net.IP
-	var err error
-	for {
-		ip, err = getMyIp()
-		if err != nil {
-			fmt.Println(err)
-		} else {
-			break
-		}
-
-		ip, err = getMyIpV2()
-		if err != nil {
-			fmt.Println(err)
-		}
-
-		break
+	ip, err := myip.GetMyIp()
+	if err != nil {
+		log.Println(err)
 	}
-	fmt.Println("你的IP地址:", ip)
+	log.Println("你的IP地址:", ip)
 
 	rIpStr := *dstIpaddr
 	if rIpStr == "" {
 		fmt.Print("请输入对方IP地址: ")
-		_, err = fmt.Scanln(&rIpStr)
+		_, err := fmt.Scanln(&rIpStr)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(-1)
@@ -204,7 +135,7 @@ func main() {
 }
 
 func communicat(lPort int, rAddr *net.UDPAddr) {
-	fmt.Println("建立连接...")
+	log.Println("建立连接...")
 	host, err := os.Hostname()
 	if err != nil {
 		fmt.Println(err)
