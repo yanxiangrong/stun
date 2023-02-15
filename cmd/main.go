@@ -16,6 +16,7 @@ var token = flag.String("t", "20232023", "Token")
 var listenPort = flag.Int("p", 20232, "Listen port")
 var dstIpaddr = flag.String("ip", "", "Target IP address")
 var delayNum = flag.Int("i", -1, "Scan interval")
+var debug = flag.Bool("debug", false, "")
 
 func scan(lPort int, rIp net.IP) *net.UDPAddr {
 	lUdpAddr, _ := net.ResolveUDPAddr("udp4", fmt.Sprintf(":%d", lPort))
@@ -24,7 +25,12 @@ func scan(lPort int, rIp net.IP) *net.UDPAddr {
 		fmt.Println(err)
 		os.Exit(-1)
 	}
-	defer listenConn.Close()
+	defer func(listenConn *net.UDPConn) {
+		err = listenConn.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}(listenConn)
 
 	var rAddr *net.UDPAddr
 	recvD := make(chan struct{})
@@ -106,14 +112,62 @@ func scan(lPort int, rIp net.IP) *net.UDPAddr {
 	return rAddr
 }
 
+func communicat(lPort int, rAddr *net.UDPAddr) {
+	log.Println("建立连接...")
+	host, err := os.Hostname()
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	lUdpAddr, _ := net.ResolveUDPAddr("udp4", fmt.Sprintf(":%d", lPort))
+	listenConn, err := net.ListenUDP("udp4", lUdpAddr)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(-1)
+	}
+	defer func(listenConn *net.UDPConn) {
+		err = listenConn.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}(listenConn)
+
+	go func() {
+		for {
+			buf := make([]byte, 4096)
+			var n int
+			n, _, err = listenConn.ReadFromUDP(buf)
+			if err != nil {
+				fmt.Println(err)
+				os.Exit(-1)
+			}
+			log.Println("Recv:", buf[:n])
+		}
+	}()
+
+	for {
+		send := "test-" + host
+		log.Println("Send:", send)
+		_, err = listenConn.WriteToUDP([]byte(send), rAddr)
+		time.Sleep(2 * time.Second)
+	}
+}
+
 func main() {
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	log.Println("Started")
 
 	flag.Parse()
+
+	if *debug {
+		log.SetFlags(log.LstdFlags | log.Lshortfile)
+	}
+
 	rand.Seed(time.Now().UnixNano())
 	if *delayNum < 0 {
 		*delayNum = rand.Intn(4000)
+		if *debug {
+			log.Println("delayNum:", *delayNum)
+		}
 	}
 
 	ip, err := myip.GetMyIp()
@@ -137,49 +191,4 @@ func main() {
 	rAddr := scan(lPort, net.ParseIP(rIpStr))
 
 	communicat(lPort, rAddr)
-}
-
-func communicat(lPort int, rAddr *net.UDPAddr) {
-	log.Println("建立连接...")
-	host, err := os.Hostname()
-	if err != nil {
-		fmt.Println(err)
-	}
-
-	lUdpAddr, _ := net.ResolveUDPAddr("udp4", fmt.Sprintf(":%d", lPort))
-	listenConn, err := net.ListenUDP("udp4", lUdpAddr)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(-1)
-	}
-	defer listenConn.Close()
-
-	go func() {
-		for {
-			buf := make([]byte, 4096)
-			var n int
-			n, _, err = listenConn.ReadFromUDP(buf)
-			if err != nil {
-				fmt.Println(err)
-				os.Exit(-1)
-			}
-			fmt.Printf("%s Recv: %s\n", timeStr(), buf[:n])
-		}
-	}()
-
-	for {
-		send := "test-" + host
-		fmt.Printf("%s Send: %s\n", timeStr(), send)
-		_, err = listenConn.WriteToUDP([]byte(send), rAddr)
-		time.Sleep(2 * time.Second)
-	}
-}
-
-func timeStr() string {
-	currentTime := time.Now()
-	return fmt.Sprintf("%02d:%02d:%02d.%03d",
-		currentTime.Hour(),
-		currentTime.Hour(),
-		currentTime.Second(),
-		currentTime.Nanosecond()/1000_000)
 }
