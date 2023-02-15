@@ -15,7 +15,7 @@ import (
 var token = flag.String("t", "20232023", "Token")
 var listenPort = flag.Int("p", 20232, "Listen port")
 var dstIpaddr = flag.String("ip", "", "Target IP address")
-var delayNum = flag.Int("i", rand.Intn(4000), "Scan interval")
+var delayNum = flag.Int("i", -1, "Scan interval")
 
 func scan(lPort int, rIp net.IP) *net.UDPAddr {
 	lUdpAddr, _ := net.ResolveUDPAddr("udp4", fmt.Sprintf(":%d", lPort))
@@ -107,9 +107,14 @@ func scan(lPort int, rIp net.IP) *net.UDPAddr {
 }
 
 func main() {
-	flag.Parse()
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	log.Println("Started")
+
+	flag.Parse()
+	rand.Seed(time.Now().UnixNano())
+	if *delayNum < 0 {
+		*delayNum = rand.Intn(4000)
+	}
 
 	ip, err := myip.GetMyIp()
 	if err != nil {
