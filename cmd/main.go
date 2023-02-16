@@ -1,14 +1,19 @@
 package main
 
 import (
+	"context"
+	"crypto/tls"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/quic-go/quic-go"
 	"github.com/schollz/progressbar/v3"
 	"log"
 	"math/rand"
 	"net"
 	"os"
 	"stun/package/myip"
+	"stun/package/utils"
 	"time"
 )
 
@@ -18,15 +23,25 @@ var dstIpaddr = flag.String("ip", "", "Target IP address")
 var delayNum = flag.Int("i", -1, "Scan interval")
 var debug = flag.Bool("debug", false, "")
 
-func scan(lPort int, rIp net.IP) *net.UDPAddr {
+const alpn = "stun"
+
+type Handshake struct {
+	Token string `json:"token"`
+	Code  int    `json:"code"`
+}
+
+func createConn() (*net.UDPConn, error) {
 	lUdpAddr, _ := net.ResolveUDPAddr("udp4", fmt.Sprintf(":%d", lPort))
 	listenConn, err := net.ListenUDP("udp4", lUdpAddr)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(-1)
+		return nil, err
 	}
+	return listenConn, nil
+}
+
+func scan(listenConn *net.UDPConn, rIp net.IP) (*net.UDPAddr, int) {
 	defer func(listenConn *net.UDPConn) {
-		err = listenConn.Close()
+		err := listenConn.Close()
 		if err != nil {
 			log.Println(err)
 		}
@@ -34,39 +49,51 @@ func scan(lPort int, rIp net.IP) *net.UDPAddr {
 
 	var rAddr *net.UDPAddr
 	recvD := make(chan struct{})
+	recvCode := 0
+
 	go func() {
 		for {
 			buf := make([]byte, 4096)
 			var n int
 			n, rAddr, err = listenConn.ReadFromUDP(buf)
 			if err != nil {
-				fmt.Println(err)
-				os.Exit(-1)
+				log.Fatalln(err)
 			}
 
-			if string(buf[:n]) != *token {
+			var handshake Handshake
+			err = json.Unmarshal(buf[:n], &handshake)
+
+			if err != nil || handshake.Token != *token {
 				continue
 			}
 
+			recvCode = handshake.Code
 			close(recvD)
 			break
 		}
 	}()
 
-	send := func(port int) {
+	send := func(port int, code int) {
 		addr := net.UDPAddr{
 			Port: port,
 			IP:   rIp,
 		}
-		_, err = listenConn.WriteToUDP([]byte(*token), &addr)
+
+		b, err := json.Marshal(Handshake{
+			Token: *token,
+			Code:  code,
+		})
 		if err != nil {
-			fmt.Println(err)
-			os.Exit(-1)
+			log.Panicln(err)
+		}
+
+		_, err = listenConn.WriteToUDP(b, &addr)
+		if err != nil {
+			log.Fatalln(err)
 		}
 	}
 
 	exit := false
-
 	for j := 1; j <= 4096 && !exit; j++ {
 		fmt.Printf("第 %d 轮探测中... (listen on %s)\n", j, lUdpAddr)
 
@@ -77,7 +104,7 @@ func scan(lPort int, rIp net.IP) *net.UDPAddr {
 			progressbar.OptionThrottle(100*time.Millisecond),
 		)
 		for i := 1; i <= 65535 && !exit; i++ {
-			send(i)
+			send(i, 0)
 
 			_ = bar.Add(1)
 			//fmt.Printf("%d%%..", i*100/65535)
@@ -105,11 +132,14 @@ func scan(lPort int, rIp net.IP) *net.UDPAddr {
 	fmt.Printf("探测成功. (remote %s)\n", rAddr.String())
 
 	rIp = rAddr.IP
-	for i := 0; i < 5; i++ {
-		send(rAddr.Port)
-		time.Sleep(time.Millisecond)
+	if recvCode == 0 {
+		for i := 0; i < 5; i++ {
+			send(rAddr.Port, 1)
+			time.Sleep(time.Millisecond)
+		}
 	}
-	return rAddr
+
+	return rAddr, recvCode
 }
 
 func communicat(lPort int, rAddr *net.UDPAddr) {
@@ -188,7 +218,47 @@ func main() {
 
 	//lPort := generatePort()
 	lPort := *listenPort
-	rAddr := scan(lPort, net.ParseIP(rIpStr))
+	conn, err := createConn()
+	if err != nil {
+		log.Fatalln(conn)
+	}
+
+	rAddr, recvCode := scan(conn, net.ParseIP(rIpStr))
 
 	communicat(lPort, rAddr)
+
+	switch recvCode {
+	case 0:
+		server(conn)
+	case 1:
+		client(conn, rAddr)
+	}
+}
+
+func server(conn *net.UDPConn) {
+	listener, err := quic.Listen(conn, utils.GenerateTLSConfig(alpn), nil)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	for {
+		conn, err := listener.Accept(context.Background())
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		go echo(conn)
+		//todo
+	}
+}
+
+func client(conn *net.UDPConn, remote net.Addr) {
+	tlsConf := &tls.Config{
+		InsecureSkipVerify: true,
+		NextProtos:         []string{alpn},
+	}
+	quicConn, err := quic.Dial(conn, remote, "", tlsConf, nil)
+	if err != nil {
+		log.Fatalln()
+	}
 }
