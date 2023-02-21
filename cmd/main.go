@@ -1,25 +1,22 @@
 package main
 
 import (
-	"context"
-	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/quic-go/quic-go"
 	"github.com/schollz/progressbar/v3"
 	"log"
 	"math/rand"
 	"net"
 	"os"
+	"stun/internal/service"
 	"stun/package/myip"
-	"stun/package/utils"
 	"time"
 )
 
 var token = flag.String("t", "20232023", "Token")
 var listenPort = flag.Int("p", 20232, "Listen port")
-var dstIpaddr = flag.String("ip", "", "Target IP address")
+var dstIpaddr = flag.String("ip", "255.255.255.255", "Target IP address")
 var delayNum = flag.Int("i", -1, "Scan interval")
 var debug = flag.Bool("debug", false, "")
 
@@ -28,15 +25,6 @@ const alpn = "stun"
 type Handshake struct {
 	Token string `json:"token"`
 	Code  int    `json:"code"`
-}
-
-func createConn() (*net.UDPConn, error) {
-	lUdpAddr, _ := net.ResolveUDPAddr("udp4", fmt.Sprintf(":%d", lPort))
-	listenConn, err := net.ListenUDP("udp4", lUdpAddr)
-	if err != nil {
-		return nil, err
-	}
-	return listenConn, nil
 }
 
 func scan(listenConn *net.UDPConn, rIp net.IP) (*net.UDPAddr, int) {
@@ -55,10 +43,11 @@ func scan(listenConn *net.UDPConn, rIp net.IP) (*net.UDPAddr, int) {
 		for {
 			buf := make([]byte, 4096)
 			var n int
-			n, rAddr, err = listenConn.ReadFromUDP(buf)
+			n, addr, err := listenConn.ReadFromUDP(buf)
 			if err != nil {
 				log.Fatalln(err)
 			}
+			rAddr = addr
 
 			var handshake Handshake
 			err = json.Unmarshal(buf[:n], &handshake)
@@ -95,7 +84,7 @@ func scan(listenConn *net.UDPConn, rIp net.IP) (*net.UDPAddr, int) {
 
 	exit := false
 	for j := 1; j <= 4096 && !exit; j++ {
-		fmt.Printf("第 %d 轮探测中... (listen on %s)\n", j, lUdpAddr)
+		fmt.Printf("第 %d 轮探测中...\n", j)
 
 		bar := progressbar.NewOptions(65535,
 			progressbar.OptionSetWidth(25),
@@ -218,7 +207,7 @@ func main() {
 
 	//lPort := generatePort()
 	lPort := *listenPort
-	conn, err := createConn()
+	conn, err := service.CreateConn(lPort)
 	if err != nil {
 		log.Fatalln(conn)
 	}
@@ -232,33 +221,5 @@ func main() {
 		server(conn)
 	case 1:
 		client(conn, rAddr)
-	}
-}
-
-func server(conn *net.UDPConn) {
-	listener, err := quic.Listen(conn, utils.GenerateTLSConfig(alpn), nil)
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	for {
-		conn, err := listener.Accept(context.Background())
-		if err != nil {
-			log.Fatalln(err)
-		}
-
-		go echo(conn)
-		//todo
-	}
-}
-
-func client(conn *net.UDPConn, remote net.Addr) {
-	tlsConf := &tls.Config{
-		InsecureSkipVerify: true,
-		NextProtos:         []string{alpn},
-	}
-	quicConn, err := quic.Dial(conn, remote, "", tlsConf, nil)
-	if err != nil {
-		log.Fatalln()
 	}
 }
